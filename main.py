@@ -20,11 +20,11 @@ SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 800
 
 MB_LEFT = 1
+MB_RIGHT = 3
 REAL_PLAYER_NUMBER = 0
 II_NUMBER = 1
 
-PLAYER_POSITIONS = [(0, SCREEN_HEIGHT - Tile.HEIGHT * 3), (100, 100), (0, 500),
-                    (500, 0)]
+PLAYER_POSITIONS = [(0, SCREEN_HEIGHT - Tile.HEIGHT * 6), (SCREEN_WIDTH - Tile.WIDTH, 0)]
 POSSIBLE_TILES = [
     (first, second)
     for first in range(0, 7)
@@ -44,10 +44,12 @@ class Game:
         self.tiles = pg.sprite.Group()
         self.buttons = pg.sprite.Group()
         self.board = Board()
-        self.players = [get_player()]
+        self.players = None
         self.turn_number = -1
         # self.submit_button = Button()
         self.possible_tiles = POSSIBLE_TILES.copy()
+        self.right_mouse_pressed = False
+        self.mouse_position = (0, 0)
 
     def run(self):
         self.init_sprites()
@@ -91,22 +93,25 @@ class Game:
         buttons_holder.add_sprite(submit_button)
 
     def init_players(self):
+        self.players = [get_player(), NeuralNetwork(height=100)]
         for i, player in enumerate(self.players):
-            # NOTE: code smells
             player.hand.set_position(*PLAYER_POSITIONS[i])
             self.sprites.add(player.hand)
+            if i != REAL_PLAYER_NUMBER:
+                player.hand.rotate()
 
-            for _ in range(20):
+            for _ in range(7):
                 value = random.choice(self.possible_tiles)
                 self.possible_tiles.remove(value)
 
-                tile = Tile(value[0], value[1])
+                tile = Tile(value[0], value[1], covered=(i > 0))
                 player.hand.add_tile(tile)
-                # LOG.info((tile.rect.x, tile.rect.y))
 
     def handle_frame(self):
         for event in pg.event.get():
             self.handle_event(event)
+
+        self.handle_camera_movement()
 
         if not self.finished():
             self.make_turn()
@@ -121,26 +126,38 @@ class Game:
         self.update_sprites()
         pg.display.flip()
 
+    def handle_camera_movement(self):
+        pressed_mouse = pg.mouse.get_pressed()
+        if pressed_mouse[MB_RIGHT - 1]:
+            new_pos = pg.mouse.get_pos()
+            self.board.rect.move_ip(new_pos[0] - self.mouse_position[0],
+                                    new_pos[1] - self.mouse_position[1])
+            LOG.error(f'{self.mouse_position} - {new_pos}')
+            self.mouse_position = new_pos
+
     def handle_event(self, event):
         if event.type == pg.QUIT:
             self.running = False
         elif event.type == pg.KEYDOWN:
             self.handle_key(event)
         elif event.type == pg.MOUSEBUTTONDOWN:
-            self.handle_mouse(event)
+            self.handle_mouse_down(event)
 
     def handle_key(self, key_event):
         pass
         # if key_event.key == pg.K_ESCAPE:
         #     self.running = False
 
-    def handle_mouse(self, mouse_button):
+    def handle_mouse_down(self, mouse_button):
         LOG.info(mouse_button)
         if mouse_button.button == MB_LEFT:
             if self.turn_number == REAL_PLAYER_NUMBER:
                 self.chose_tile_for_real_player(mouse_button.pos)
                 self.chose_region_for_tile(mouse_button.pos)
             self.handle_buttons(mouse_button.pos)
+        if mouse_button.button == MB_RIGHT:
+            LOG.info(f'PRESSED {MB_RIGHT}')
+            self.mouse_position = pg.mouse.get_pos()
 
     def chose_tile_for_real_player(self, position):
         chosen_tile = None
@@ -156,8 +173,12 @@ class Game:
         chosen_tile = None
         chosen_rect = None
         for tile in self.board.tiles:
+            tile_shift = tile.get_shift()
+            tile_shift = Point(tile_shift[0] - tile.rect.x,
+                               tile_shift[1] - tile.rect.y)
+
             for possible_rect in tile.possible_placements:
-                if in_it(possible_rect, position):
+                if in_it(possible_rect, position, tile_shift):
                     chosen_rect = possible_rect
                     break
             if chosen_rect:
@@ -183,17 +204,16 @@ class Game:
         if not turn:
             return
 
-        # self.turn_number = (self.turn_number + 1) % len(self.players)
-        self.turn_number = REAL_PLAYER_NUMBER
+        self.turn_number = (self.turn_number + 1) % len(self.players)
+        # self.turn_number = REAL_PLAYER_NUMBER
 
-        player.hand.remove_tile(turn.tile)
+        player.hand.remove_tile(turn.tile_from_hand)
         self.board.place_tile(turn.tile, turn.old_tile, turn.possible_rect,
                               turn.rect.x, turn.rect.y)
         self.board.clear_area()
 
     def update_sprites(self):
         for sprite in self.sprites:
-            # sprite.fill()
             sprite.rec_blit()
             self.screen.blit(sprite.surf, sprite.rect)
 

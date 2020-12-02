@@ -1,7 +1,7 @@
 
 import logging
 
-from printables import Hand
+from printables import Hand, find_possible_turn
 from utils import Point, Turn
 
 LOG = logging.getLogger('__main__')
@@ -16,8 +16,8 @@ def get_player():
 
 
 class Player:
-    def __init__(self):
-        self.hand = Hand()
+    def __init__(self, *args, **kwargs):
+        self.hand = Hand(*args, **kwargs)
         self._ready = False
 
     def turn(self, board):
@@ -63,7 +63,7 @@ class Player:
 
 class NeuralNetwork(Player):
     def turn(self, board):
-        return None
+        return find_possible_turn(self.hand, board)
 
 
 class RealPlayer(Player):

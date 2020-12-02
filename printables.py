@@ -2,7 +2,7 @@ from enum import Enum
 from copy import deepcopy
 import pygame as pg
 import logging
-from utils import Point, in_it, Orientation, Direction as Dir
+from utils import Point, in_it, Orientation, Direction as Dir, Turn
 
 from pygame import Rect
 
@@ -10,6 +10,21 @@ LOG = logging.getLogger('__main__')
 
 TILE_FILE_PATTERN = 'sprites/{}_{}.png'
 TILE_FILE_CHOSEN_PATTERN = 'sprites/{}_{}_chosen.png'
+
+
+def find_possible_turn(hand, board):
+    for tile in hand.tiles:
+        rotated_tile = Tile(tile.first, tile.second)
+        for _ in range(4):
+            for board_tile in board.tiles:
+                for possible_rect in board_tile.possible_placements:
+                    area = Area(tile=board_tile, rect=possible_rect)
+                    normalized_rect = board.is_valid_turn(rotated_tile, area)
+                    if normalized_rect:
+                        return Turn(rotated_tile, area.tile, normalized_rect,
+                                    area.rect, tile)
+            rotated_tile.rotate()
+    return None
 
 
 class Printable(pg.sprite.Sprite):
@@ -20,7 +35,7 @@ class Printable(pg.sprite.Sprite):
     HEIGHT = 50
 
     def __init__(self, filename=None, parent=None, position=Point(0, 0),
-                 default_color=None):
+                 default_color=None, width=None, height=None):
         super(Printable, self).__init__()
         self.rect = None
         self.surf = None
@@ -32,6 +47,8 @@ class Printable(pg.sprite.Sprite):
 
         self.sprite_file = self.default_sprite
         self.sprite_file_chosen = self.default_sprite_chosen
+        self.width = width or self.WIDTH
+        self.height = height or self.HEIGHT
         self._set_surface(filename)
         self.parent = parent
         self.set_position(*position)
@@ -67,7 +84,6 @@ class Printable(pg.sprite.Sprite):
 
     def set_position(self, x, y):
         self.rect.move_ip(-self.rect.x + x, -self.rect.y + y)
-        # self.rect.update((x, y), self.rect.size)
 
     def _set_surface(self, filename=None):
         sprite_path = filename or self.sprite_file
@@ -76,7 +92,7 @@ class Printable(pg.sprite.Sprite):
             self.surf = pg.image.load(sprite_path).convert()
             self.surf = pg.transform.rotate(self.surf, self._angle)
         except Exception:
-            self.surf = pg.Surface((self.WIDTH, self.HEIGHT))
+            self.surf = pg.Surface((self.width, self.height))
             self.fill_default()
         else:
             self._image_set = sprite_path
@@ -86,7 +102,6 @@ class Printable(pg.sprite.Sprite):
             self.rect = self.surf.get_rect(left=old_rect.left, top=old_rect.top)
         else:
             self.rect = self.surf.get_rect()
-            # self.set_position(old_rect.x, old_rect.y)
 
     def chose(self):
         self._chose(True if not self.chosen else False)
@@ -111,11 +126,8 @@ class Printable(pg.sprite.Sprite):
 
     def in_it(self, position):
         absolut_shift = self.get_shift()
-        # absolut_shift = self.surf.get_abs_offset()
         absolut_shift = Point(absolut_shift[0] - self.rect.x,
                               absolut_shift[1] - self.rect.y)
-        # absolut_shift.x += self.rect.x
-        # absolut_shift.y += self.rect.y
         return in_it(self.rect, position, absolut_shift)
 
 
@@ -132,14 +144,19 @@ class Tile(Printable):
     HEIGHT = 50
     SIZE = 50
 
-    def __init__(self, first=0, second=0, *args, **kwargs):
+    def __init__(self, first=0, second=0, covered=False, *args, **kwargs):
         super(Tile, self).__init__(*args, **kwargs)
         self.orientation = Orientation.HORIZONTAL
         self.possible_placements = None
         self.first = first
         self.second = second
-        self.sprite_file = TILE_FILE_PATTERN.format(first, second)
-        self.sprite_file_chosen = TILE_FILE_CHOSEN_PATTERN.format(first, second)
+
+        if not covered:
+            self.sprite_file = TILE_FILE_PATTERN.format(first, second)
+            self.sprite_file_chosen = TILE_FILE_CHOSEN_PATTERN.format(first, second)
+        else:
+            self.sprite_file = 'sprites/tile_back.png'
+            self.sprite_file_chosen = self.sprite_file
         self._set_surface()
         self.double = first == second
         self._angle = 0
@@ -198,24 +215,9 @@ class Tile(Printable):
             lambda x: x.dir not in [reversed_dir, discard_dir],
             self.possible_placements))
 
-    def remove_possible_placement(self, possibile_placement):
-        # found_placement = None
-        # for possible_placement in self.possible_placements:
-        #     if (possible_placement.x, possible_placement.y) == (x, y):
-        #         found_placement = possible_placement
-        #         break
-        #
-        # if found_placement:
-        if possibile_placement in self.possible_placements:
-            self.possible_placements.remove(possibile_placement)
-
-    # def rotate(self):
-    #     if self.orientation == Orientation.HORIZONTAL:
-    #         self.surf = pg.transform.rotate(self.surf, -90)
-    #         self.orientation = Orientation.VERTICAL
-    #     else:
-    #         self.orientation = Orientation.HORIZONTAL
-    #         self.surf = pg.transform.rotate(self.surf, 90)
+    def remove_possible_placement(self, possible_placement):
+        if possible_placement in self.possible_placements:
+            self.possible_placements.remove(possible_placement)
 
 
 class Hand(Printable):
@@ -223,8 +225,8 @@ class Hand(Printable):
     WIDTH = 700
     HEIGHT = 300
 
-    def __init__(self, x=0, y=0):
-        super(Hand, self).__init__()
+    def __init__(self, *args, **kwargs):
+        super(Hand, self).__init__(*args, **kwargs)
         self.sprites = pg.sprite.Group()
         self.chosen_tile = None
 
@@ -243,7 +245,7 @@ class Hand(Printable):
         else:
             new_x, new_y = 0, 0
 
-        if new_x >= self.WIDTH:
+        if new_x >= self.rect.width:
             new_x = 0
             new_y += Tile.SIZE * 2
 
