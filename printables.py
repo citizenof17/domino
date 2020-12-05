@@ -54,6 +54,17 @@ class Printable(pg.sprite.Sprite):
         self.set_position(*position)
         self.sprites = pg.sprite.Group()
 
+    @classmethod
+    def from_surface(cls, surf):
+        printable = cls()
+        printable._set_surface(surf=surf)
+        return printable
+
+    def set_dimension(self, width, height):
+        self.width = width
+        self.height = height
+        self._set_surface()
+
     def rotate(self):
         self._angle = (self._angle + 90) % 360
         self.surf = pg.transform.rotate(self.surf, 90)
@@ -78,6 +89,14 @@ class Printable(pg.sprite.Sprite):
             sprite.rec_blit()
             self.surf.blit(sprite.surf, sprite.rect)
 
+    def cleanup(self):
+        for sprite in self.sprites:
+            if hasattr(sprite, 'cleanup'):
+                sprite.cleanup()
+            sprite.kill()
+        self.sprites.empty()
+        self.kill()
+
     def fill_default(self):
         if not self._image_set:
             self.surf.fill(pg.Color(self.default_color))
@@ -85,17 +104,20 @@ class Printable(pg.sprite.Sprite):
     def set_position(self, x, y):
         self.rect.move_ip(-self.rect.x + x, -self.rect.y + y)
 
-    def _set_surface(self, filename=None):
+    def _set_surface(self, filename=None, surf=None):
         sprite_path = filename or self.sprite_file
 
-        try:
-            self.surf = pg.image.load(sprite_path).convert()
-            self.surf = pg.transform.rotate(self.surf, self._angle)
-        except Exception:
-            self.surf = pg.Surface((self.width, self.height))
-            self.fill_default()
+        if surf:
+            self.surf = surf
         else:
-            self._image_set = sprite_path
+            try:
+                self.surf = pg.image.load(sprite_path).convert()
+                self.surf = pg.transform.rotate(self.surf, self._angle)
+            except Exception:
+                self.surf = pg.Surface((self.width, self.height))
+                self.fill_default()
+            else:
+                self._image_set = sprite_path
 
         old_rect = self.rect
         if old_rect:
@@ -152,14 +174,44 @@ class Tile(Printable):
         self.second = second
 
         if not covered:
-            self.sprite_file = TILE_FILE_PATTERN.format(first, second)
-            self.sprite_file_chosen = TILE_FILE_CHOSEN_PATTERN.format(first, second)
+            self.uncover()
         else:
-            self.sprite_file = 'sprites/tile_back.png'
-            self.sprite_file_chosen = self.sprite_file
-        self._set_surface()
+            self.cover()
         self.double = first == second
         self._angle = 0
+
+    def cover(self):
+        self.sprite_file = 'sprites/tile_back.png'
+        self.sprite_file_chosen = self.sprite_file
+        self._set_surface()
+
+    def uncover(self):
+        self.sprite_file = TILE_FILE_PATTERN.format(self.first, self.second)
+        self.sprite_file_chosen = TILE_FILE_CHOSEN_PATTERN.format(self.first,
+                                                                  self.second)
+        self._set_surface()
+
+    def __lt__(self, other):
+        if self.double and self.first == 0:
+            return False
+        if other.double and other.first == 0:
+            return True
+
+        if self.double and other.double:
+            return self.first < other.first
+        elif self.double:
+            return True
+        elif other.double:
+            return False
+        return self.first + self.second < other.first + other.second
+
+    def __add__(self, other):
+        if isinstance(other, Tile):
+            return self.first + self.second + other.first + other.second
+        return self.first + self.second + other
+
+    def __radd__(self, other):
+        return other + self.first + self.second
 
     def rotate(self):
         super(Tile, self).rotate()
@@ -227,7 +279,6 @@ class Hand(Printable):
 
     def __init__(self, *args, **kwargs):
         super(Hand, self).__init__(*args, **kwargs)
-        self.sprites = pg.sprite.Group()
         self.chosen_tile = None
 
     @property
@@ -280,6 +331,14 @@ class Hand(Printable):
         if self.chosen_tile:
             self.chosen_tile.rotate()
 
+    def uncover(self):
+        for tile in self.tiles:
+            tile.uncover()
+
+    def cleanup(self):
+        super(Hand, self).cleanup()
+        self.chosen_tile = None
+
 
 class Area(Printable):
     default_sprite = 'sprites/red_square.png'
@@ -295,11 +354,11 @@ class Area(Printable):
 class Board(Printable):
     default_sprite = 'sprites/board.png'
     default_color = 'beige'
-    WIDTH = 1000
-    HEIGHT = 1000
+    WIDTH = 4000
+    HEIGHT = 4000
 
-    def __init__(self):
-        super(Board, self).__init__()
+    def __init__(self, *args, **kwargs):
+        super(Board, self).__init__(*args, **kwargs)
         self.chosen_area = None
         self.chosen_tile = None
         self.chosen_rect = None
@@ -375,7 +434,7 @@ class Board(Printable):
 
                 if (rect.dir == Dir.TO_BOTTOM and
                         next_to_tile.first == tile_to_place.first):
-                    return Rect(rect.x, rect.y, Tile.SIZE * 2, Tile.SIZE)
+                    return Rect(rect.x, rect.y, Tile.SIZE, Tile.SIZE * 2)
             return None
 
         def get_rect_for_vertical():

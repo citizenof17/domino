@@ -16,9 +16,14 @@ def get_player():
 
 
 class Player:
+    real_player = False
+
     def __init__(self, *args, **kwargs):
         self.hand = Hand(*args, **kwargs)
         self._ready = False
+
+    def is_real_player(self):
+        return self.real_player
 
     def turn(self, board):
         raise NotImplementedError()
@@ -67,13 +72,13 @@ class NeuralNetwork(Player):
 
 
 class RealPlayer(Player):
+    real_player = True
+
     def turn(self, board):
         chosen_tile = self.hand.chosen_tile
         if not chosen_tile:
             return None
 
-        # TODO: FIX IT TO normalized_area to reflect actual tile placement and
-        #  orientation
         area = board.chosen_area
         normalized_rect = board.is_valid_turn(chosen_tile)
         if normalized_rect:

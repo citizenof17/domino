@@ -16,40 +16,51 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(message)s')
 ch.setFormatter(formatter)
 LOG.addHandler(ch)
 
-SCREEN_WIDTH = 800
-SCREEN_HEIGHT = 800
+
+SCREEN_WIDTH = 1000
+SCREEN_HEIGHT = 1000
+
+INF = 1e4
 
 MB_LEFT = 1
 MB_RIGHT = 3
 REAL_PLAYER_NUMBER = 0
 II_NUMBER = 1
 
-PLAYER_POSITIONS = [(0, SCREEN_HEIGHT - Tile.HEIGHT * 6), (SCREEN_WIDTH - Tile.WIDTH, 0)]
+PLAYER_POSITIONS = [(0, SCREEN_HEIGHT - Tile.HEIGHT * 6),
+                    (SCREEN_WIDTH - Tile.WIDTH, 0)]
 POSSIBLE_TILES = [
     (first, second)
     for first in range(0, 7)
     for second in range(first, 7)
 ]
+TILES_IN_HAND = 7
 
 
 class Game:
     def __init__(self):
         pg.init()
+        pg.font.init()
         clock = pg.time.Clock()
         clock.tick(30)
+
+        self.font = pg.font.SysFont('freesansbold.ttf', 32)
 
         self.screen = pg.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         self.running = True
         self.sprites = pg.sprite.Group()
-        self.tiles = pg.sprite.Group()
+        self.texts = []
         self.buttons = pg.sprite.Group()
-        self.board = Board()
+        self.board = None
         self.players = None
-        self.turn_number = -1
-        # self.submit_button = Button()
+        self.turn_number = 0
         self.possible_tiles = POSSIBLE_TILES.copy()
         self.right_mouse_pressed = False
         self.mouse_position = (0, 0)
+        self.restart = False
+        self.user_needs_tile = False
+        self._finished = False
+        self._set_board()
 
     def run(self):
         self.init_sprites()
@@ -57,15 +68,33 @@ class Game:
         while self.running:
             self.handle_frame()
         pg.quit()
+        return self.restart
+
+    def _set_board(self):
+        x_shift = -(Board.WIDTH - SCREEN_WIDTH) / 2
+        y_shift = -(Board.HEIGHT - SCREEN_HEIGHT) / 2
+        self.board = Board(position=Point(x_shift, y_shift))
 
     def init_game_start(self):
-        self.turn_number = REAL_PLAYER_NUMBER
-        first_tile = self.find_first_tile()
+        player_idx, first_tile = self.find_first_tile()
+        self.players[player_idx].hand.remove_tile(first_tile)
+        if player_idx != REAL_PLAYER_NUMBER:
+            first_tile = Tile(first_tile.first, first_tile.second)
+
         self.board.place_tile(first_tile, None, None,
-                              SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2)
+                              self.board.WIDTH / 2, self.board.HEIGHT / 2)
+
+        self.inc_turn_number(player_idx)
 
     def find_first_tile(self):
-        return Tile()
+        player_idx = 0
+        overall_min = Tile(0, 0)
+        for i, player in enumerate(self.players):
+            player_best_tile = min(player.hand.tiles)
+            if player_best_tile < overall_min:
+                overall_min = player_best_tile
+                player_idx = i
+        return player_idx, overall_min
 
     def init_sprites(self):
         self.sprites.add(self.board)
@@ -86,26 +115,41 @@ class Game:
         submit_button = Button(player.ready,
                                'sprites/submit_button.png', position=Point(5, 50),
                                default_color='darkgoldenrod3')
+        bazar_button = Button(self.take_from_bazar_for_player,
+                              'sprites/bazar.png', position=Point(55, 0),
+                              default_color='darkgoldenrod2')
         self.buttons.add(rotate_button)
         self.buttons.add(submit_button)
+        self.buttons.add(bazar_button)
 
-        buttons_holder.add_sprite(rotate_button)
-        buttons_holder.add_sprite(submit_button)
+        for button in self.buttons:
+            buttons_holder.add_sprite(button)
 
     def init_players(self):
-        self.players = [get_player(), NeuralNetwork(height=100)]
+        self.players = [RealPlayer(), NeuralNetwork()]
         for i, player in enumerate(self.players):
+            if player.is_real_player():
+                player.hand.set_dimension(SCREEN_WIDTH, Tile.SIZE * 6)
+            else:
+                player.hand.set_dimension(SCREEN_WIDTH, Tile.SIZE * 2)
+
             player.hand.set_position(*PLAYER_POSITIONS[i])
             self.sprites.add(player.hand)
-            if i != REAL_PLAYER_NUMBER:
+            if not player.is_real_player():
                 player.hand.rotate()
 
-            for _ in range(7):
-                value = random.choice(self.possible_tiles)
-                self.possible_tiles.remove(value)
+            for _ in range(TILES_IN_HAND):
+                self.add_new_tile_for_player(player)
 
-                tile = Tile(value[0], value[1], covered=(i > 0))
-                player.hand.add_tile(tile)
+    def add_new_tile_for_player(self, player, tile_value=None):
+        if not tile_value:
+            tile_value = self.take_from_bazar()
+        if not tile_value:
+            raise RuntimeError('No tiles left')
+
+        tile = Tile(tile_value[0], tile_value[1],
+                    covered=(not player.is_real_player()))
+        player.hand.add_tile(tile)
 
     def handle_frame(self):
         for event in pg.event.get():
@@ -115,12 +159,69 @@ class Game:
 
         if not self.finished():
             self.make_turn()
-
-        # self.player.move(pg.key.get_pressed())
+        else:
+            for player in self.players:
+                player.hand.uncover()
         self.refresh()
 
     def finished(self):
-        return False
+        if self._finished:
+            return self._finished
+
+        for player in self.players:
+            if not player.hand.tiles:
+                self._finished = True
+                if player.is_real_player():
+                    self.player_won()
+                else:
+                    self.player_lost()
+                return True
+
+        if not self.possible_tiles and not any(
+                find_possible_turn(player.hand, self.board)
+                for player in self.players):
+            # FISH
+            self._finished = True
+
+            players_with_minimum_points = []
+            minimum_points = INF
+            for player in self.players:
+                player_points = sum(player.hand.tiles)
+                if player_points < minimum_points:
+                    minimum_points = player_points
+                    players_with_minimum_points = []
+
+                if minimum_points == player_points:
+                    players_with_minimum_points.append(player)
+
+            if len(players_with_minimum_points) == 1:
+                if players_with_minimum_points[0].is_real_player():
+                    self.player_won()
+                else:
+                    self.player_lost()
+            if len(players_with_minimum_points) > 1:
+                self.draw()
+
+        return self._finished
+
+    def _add_text(self, text):
+        LOG.error("Adding text")
+        text_surface = self.font.render(text, False, (0, 255, 0), (0, 0, 128))
+        text = Printable.from_surface(text_surface)
+        text.set_position(100, 100)
+        self.texts.append(text)
+
+    def player_won(self):
+        self._add_text('You win!')
+        # self._add_text('You win!\n Press R to restart')
+
+    def player_lost(self):
+        self._add_text('You lose!')
+        # self._add_text('You lose!\n Press R to restart')
+
+    def draw(self):
+        self._add_text('Fish!!!')
+        # self._add_text('Fish!!!\n Press R to restart')
 
     def refresh(self):
         self.update_sprites()
@@ -139,14 +240,13 @@ class Game:
         if event.type == pg.QUIT:
             self.running = False
         elif event.type == pg.KEYDOWN:
+            if event.key == pg.K_r:
+                self.running = False
+                self.restart = True
+                return
             self.handle_key(event)
         elif event.type == pg.MOUSEBUTTONDOWN:
             self.handle_mouse_down(event)
-
-    def handle_key(self, key_event):
-        pass
-        # if key_event.key == pg.K_ESCAPE:
-        #     self.running = False
 
     def handle_mouse_down(self, mouse_button):
         LOG.info(mouse_button)
@@ -194,30 +294,91 @@ class Game:
 
     def make_turn(self):
         player = self.players[self.turn_number]
-        player_is_ready = player.is_ready()
-        player.not_ready()
+        real_player = player.is_real_player()
 
-        if self.turn_number == REAL_PLAYER_NUMBER and not player_is_ready:
+        if not find_possible_turn(player.hand, self.board) and real_player:
+            if self.possible_tiles:
+                self.user_needs_tile = True
+            else:
+                self.inc_turn_number()
             return
+
+        if real_player:
+            if not player.is_ready():
+                return
+            player.not_ready()
+
         turn = player.turn(self.board)
 
         if not turn:
+            if not real_player:
+                if self.possible_tiles:
+                    self.take_from_bazar_for_player(player)
+                else:
+                    self.inc_turn_number()
             return
 
-        self.turn_number = (self.turn_number + 1) % len(self.players)
-        # self.turn_number = REAL_PLAYER_NUMBER
+        self.inc_turn_number()
 
         player.hand.remove_tile(turn.tile_from_hand)
         self.board.place_tile(turn.tile, turn.old_tile, turn.possible_rect,
                               turn.rect.x, turn.rect.y)
         self.board.clear_area()
 
+    def inc_turn_number(self, initial_number=None):
+        if initial_number is not None:
+            self.turn_number = initial_number
+        self.turn_number = (self.turn_number + 1) % len(self.players)
+
+    def take_from_bazar_for_player(self, player=None):
+        if not player:  # by default lets give to a real player
+            if self.user_needs_tile and self.turn_number == REAL_PLAYER_NUMBER:
+                player = self.players[REAL_PLAYER_NUMBER]
+            else:
+                return
+
+        value = self.take_from_bazar()
+        if not value or not player:
+            return
+
+        self.add_new_tile_for_player(player, value)
+        self.user_needs_tile = False
+
+    def take_from_bazar(self):
+        if self.possible_tiles:
+            value = random.choice(self.possible_tiles)
+            self.possible_tiles.remove(value)
+            return value
+        return None
+
     def update_sprites(self):
         for sprite in self.sprites:
             sprite.rec_blit()
             self.screen.blit(sprite.surf, sprite.rect)
+        for text in self.texts:
+            self.screen.blit(text.surf, text.rect)
+
+    def cleanup(self):
+        for player in self.players:
+            player.hand.cleanup()
+        self.players = None
+
+        for button in self.buttons:
+            button.cleanup()
+
+        for sprite in self.sprites:
+            sprite.cleanup()
+
+        self.texts = None
+        self.board.cleanup()
+        self.board.kill()
+
+        self.screen = None
 
 
 if __name__ == '__main__':
-    game = Game()
-    game.run()
+    new_game = True
+    while new_game:
+        game = Game()
+        new_game = game.run()
+        game.cleanup()
