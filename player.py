@@ -1,18 +1,7 @@
-
-import logging
-
 from printables import Hand, find_possible_turn
-from utils import Point, Turn
-
-LOG = logging.getLogger('__main__')
+from utils import Turn
 
 MOVING = False
-
-
-def get_player():
-    # if MOVING:
-    #     return MovingPlayer()
-    return RealPlayer()
 
 
 class Player:
@@ -36,34 +25,6 @@ class Player:
 
     def not_ready(self):
         self._ready = False
-
-
-# class MovingPlayer(Printable):
-#     def __init__(self):
-#         super(MovingPlayer, self).__init__()
-#         self.surf.fill(pg.Color('darkcyan'))
-#
-#     def move(self, pressed_keys):
-#         dirs = {
-#             pg.K_w: (0, -5),
-#             pg.K_s: (0, 5),
-#             pg.K_a: (-5, 0),
-#             pg.K_d: (5, 0)
-#         }
-#
-#         for key, direction in dirs.items():
-#             if pressed_keys[key]:
-#                 LOG.info('PRESSED %s', key)
-#                 self.rect.move_ip(*direction)
-#
-#         if self.rect.left < 0:
-#             self.rect.left = 0
-#         if self.rect.right > SCREEN_WIDTH:
-#             self.rect.right = SCREEN_WIDTH
-#         if self.rect.top <= 0:
-#             self.rect.top = 0
-#         if self.rect.bottom >= SCREEN_HEIGHT:
-#             self.rect.bottom = SCREEN_HEIGHT
 
 
 class NeuralNetwork(Player):

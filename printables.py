@@ -1,17 +1,20 @@
-from enum import Enum
-from copy import deepcopy
 import pygame as pg
-import logging
-from utils import Point, in_it, Orientation, Direction as Dir, Turn
+from utils import Point, in_it, Orientation, Direction as Dir, Turn, get_sprite_path
 
 from pygame import Rect
 
-LOG = logging.getLogger('__main__')
+TILE_FILE_PATTERN = '{}_{}'
+TILE_FILE_CHOSEN_PATTERN = '{}_{}_chosen'
 
-TILE_FILE_PATTERN = 'sprites/{}_{}.png'
-TILE_FILE_CHOSEN_PATTERN = 'sprites/{}_{}_chosen.png'
+TILE_BASE_FILEPATH = get_sprite_path('tile_base')
+TILE_BASE_CHOSEN_FILEPATH = get_sprite_path('tile_base_chosen')
+COVERED_TILE_FILEPATH = get_sprite_path('tile_back')
+HAND_FILEPATH = get_sprite_path('hand')
+AREA_FILEPATH = get_sprite_path('red_square')
+BOARD_FILEPATH = get_sprite_path('board')
 
 
+# Does not actually belong here
 def find_possible_turn(hand, board):
     for tile in hand.tiles:
         rotated_tile = Tile(tile.first, tile.second)
@@ -37,6 +40,8 @@ class Printable(pg.sprite.Sprite):
     def __init__(self, filename=None, parent=None, position=Point(0, 0),
                  default_color=None, width=None, height=None):
         super(Printable, self).__init__()
+        self.sprites = pg.sprite.Group()
+        self.parent = parent
         self.rect = None
         self.surf = None
         self.chosen = False
@@ -50,15 +55,23 @@ class Printable(pg.sprite.Sprite):
         self.width = width or self.WIDTH
         self.height = height or self.HEIGHT
         self._set_surface(filename)
-        self.parent = parent
         self.set_position(*position)
-        self.sprites = pg.sprite.Group()
 
     @classmethod
     def from_surface(cls, surf):
         printable = cls()
         printable._set_surface(surf=surf)
         return printable
+
+    def add_sprite(self, sprite):
+        sprite.parent = self
+        self.sprites.add(sprite)
+
+    def remove_sprite(self, tile):
+        try:
+            self.tiles.remove(tile)
+        except ValueError:
+            pass
 
     def set_dimension(self, width, height):
         self.width = width
@@ -73,29 +86,11 @@ class Printable(pg.sprite.Sprite):
     def is_chosen(self):
         return self.chosen
 
-    def add_sprite(self, sprite):
-        sprite.parent = self
-        self.sprites.add(sprite)
-
-    def remove_sprite(self, tile):
-        try:
-            self.tiles.remove(tile)
-        except ValueError:
-            pass
-
     def rec_blit(self):
         self.fill_default()
         for sprite in self.sprites:
             sprite.rec_blit()
             self.surf.blit(sprite.surf, sprite.rect)
-
-    def cleanup(self):
-        for sprite in self.sprites:
-            if hasattr(sprite, 'cleanup'):
-                sprite.cleanup()
-            sprite.kill()
-        self.sprites.empty()
-        self.kill()
 
     def fill_default(self):
         if not self._image_set:
@@ -125,6 +120,16 @@ class Printable(pg.sprite.Sprite):
         else:
             self.rect = self.surf.get_rect()
 
+    def in_it(self, position):
+        absolut_shift = self.get_shift()
+        absolut_shift = Point(absolut_shift[0] - self.rect.x,
+                              absolut_shift[1] - self.rect.y)
+        return in_it(self.rect, position, absolut_shift)
+
+    def get_shift(self):
+        parent_shift = self.parent.get_shift() if self.parent else Point(0, 0)
+        return Point(self.rect.x + parent_shift.x, self.rect.y + parent_shift.y)
+
     def chose(self):
         self._chose(True if not self.chosen else False)
 
@@ -142,15 +147,13 @@ class Printable(pg.sprite.Sprite):
             self.chosen = False
             self._set_surface(self.sprite_file)
 
-    def get_shift(self):
-        parent_shift = self.parent.get_shift() if self.parent else Point(0, 0)
-        return Point(self.rect.x + parent_shift.x, self.rect.y + parent_shift.y)
-
-    def in_it(self, position):
-        absolut_shift = self.get_shift()
-        absolut_shift = Point(absolut_shift[0] - self.rect.x,
-                              absolut_shift[1] - self.rect.y)
-        return in_it(self.rect, position, absolut_shift)
+    def cleanup(self):
+        for sprite in self.sprites:
+            if hasattr(sprite, 'cleanup'):
+                sprite.cleanup()
+            sprite.kill()
+        self.sprites.empty()
+        self.kill()
 
 
 class MyRect(Rect):
@@ -160,8 +163,8 @@ class MyRect(Rect):
 
 
 class Tile(Printable):
-    default_sprite = 'sprites/tile_base.png'
-    default_sprite_chosen = 'sprites/tile_base_chosen.png'
+    default_sprite = TILE_BASE_FILEPATH
+    default_sprite_chosen = TILE_BASE_CHOSEN_FILEPATH
     WIDTH = 100
     HEIGHT = 50
     SIZE = 50
@@ -172,24 +175,13 @@ class Tile(Printable):
         self.possible_placements = None
         self.first = first
         self.second = second
+        self.double = first == second
 
         if not covered:
             self.uncover()
         else:
             self.cover()
-        self.double = first == second
         self._angle = 0
-
-    def cover(self):
-        self.sprite_file = 'sprites/tile_back.png'
-        self.sprite_file_chosen = self.sprite_file
-        self._set_surface()
-
-    def uncover(self):
-        self.sprite_file = TILE_FILE_PATTERN.format(self.first, self.second)
-        self.sprite_file_chosen = TILE_FILE_CHOSEN_PATTERN.format(self.first,
-                                                                  self.second)
-        self._set_surface()
 
     def __lt__(self, other):
         if self.double and self.first == 0:
@@ -213,6 +205,18 @@ class Tile(Printable):
     def __radd__(self, other):
         return other + self.first + self.second
 
+    def cover(self):
+        self.sprite_file = COVERED_TILE_FILEPATH
+        self.sprite_file_chosen = self.sprite_file
+        self._set_surface()
+
+    def uncover(self):
+        self.sprite_file = get_sprite_path(
+            TILE_FILE_PATTERN.format(self.first, self.second))
+        self.sprite_file_chosen = get_sprite_path(
+            TILE_FILE_CHOSEN_PATTERN.format(self.first, self.second))
+        self._set_surface()
+
     def rotate(self):
         super(Tile, self).rotate()
 
@@ -235,24 +239,21 @@ class Tile(Printable):
                 self._make_rect(rect.left - self.SIZE, rect.top, Dir.TO_LEFT),
             ]
             if self.double:
-                self.possible_placements.extend(
-                    [self._make_rect(rect.left + self.SIZE / 2,
-                                     rect.top - self.HEIGHT, Dir.TO_TOP),
-                     self._make_rect(rect.left + self.SIZE / 2, rect.bottom,
-                                     Dir.TO_BOTTOM)]
-                )
+                self.possible_placements.extend([
+                    self._make_rect(rect.left + self.SIZE / 2, rect.top - self.SIZE,
+                                    Dir.TO_TOP),
+                    self._make_rect(rect.left + self.SIZE / 2, rect.bottom,
+                                    Dir.TO_BOTTOM)])
         else:
             self.possible_placements = [
-                self._make_rect(rect.left, rect.top - self.HEIGHT, Dir.TO_TOP),
-                self._make_rect(rect.left, rect.bottom, Dir.TO_BOTTOM),
-            ]
+                self._make_rect(rect.left, rect.top - self.SIZE, Dir.TO_TOP),
+                self._make_rect(rect.left, rect.bottom, Dir.TO_BOTTOM)]
             if self.double:
-                self.possible_placements.extend(
-                    [self._make_rect(rect.right, rect.top + self.SIZE / 2,
-                                     Dir.TO_RIGHT),
-                     self._make_rect(rect.left - self.SIZE,
-                                     rect.top + self.SIZE / 2, Dir.TO_LEFT)]
-                )
+                self.possible_placements.extend([
+                    self._make_rect(rect.right, rect.top + self.SIZE / 2,
+                                    Dir.TO_RIGHT),
+                    self._make_rect(rect.left - self.SIZE, rect.top + self.SIZE / 2,
+                                    Dir.TO_LEFT)])
 
     def remove_possible_placements_by_dir(self, discard_dir=None,
                                           discard_reversed_dir=None):
@@ -273,7 +274,7 @@ class Tile(Printable):
 
 
 class Hand(Printable):
-    default_sprite = 'sprites/hand.png'
+    default_sprite = HAND_FILEPATH
     WIDTH = 700
     HEIGHT = 300
 
@@ -284,10 +285,6 @@ class Hand(Printable):
     @property
     def tiles(self):
         return self.sprites
-
-    def fill(self, tiles):
-        for tile in tiles:
-            self.add_tile(tile)
 
     def add_tile(self, tile):
         if self.tiles:
@@ -312,9 +309,12 @@ class Hand(Printable):
         except ValueError:
             pass
         else:
+            # To keep hand dense by replacing tiles in it
             tiles = self.tiles.copy()
             self.tiles.empty()
-            self.fill(tiles)
+
+            for tile in tiles:
+                self.add_tile(tile)
 
     def chose_tile(self, chosen_tile):
         if self.chosen_tile:
@@ -325,7 +325,6 @@ class Hand(Printable):
         else:
             chosen_tile.chose()
             self.chosen_tile = chosen_tile
-        LOG.info("Chosen Tile: {}".format(chosen_tile))
 
     def rotate_chosen_tile(self):
         if self.chosen_tile:
@@ -341,7 +340,7 @@ class Hand(Printable):
 
 
 class Area(Printable):
-    default_sprite = 'sprites/red_square.png'
+    default_sprite = AREA_FILEPATH
     WIDTH = 50
     HEIGHT = 50
 
@@ -352,7 +351,7 @@ class Area(Printable):
 
 
 class Board(Printable):
-    default_sprite = 'sprites/board.png'
+    default_sprite = BOARD_FILEPATH
     default_color = 'beige'
     WIDTH = 4000
     HEIGHT = 4000
@@ -368,7 +367,6 @@ class Board(Printable):
         self.clear_area()
         self.chosen_area = Area(parent=self, tile=chosen_tile, rect=chosen_rect)
         self.add_sprite(self.chosen_area)
-        LOG.info("Chosen Area: {}".format(self.chosen_area))
 
     def clear_area(self):
         if self.chosen_area:
@@ -487,12 +485,6 @@ class Board(Printable):
         return inflated_rect.collidelist([
             tile.rect for tile in self.tiles if tile not in except_for]) != -1
 
-    def possible_placement(self, *args):
-        return False
-
-    def chose_region(self, *args):
-        pass
-
 
 class ButtonHolder(Printable):
     default_color = 'cornflowerblue'
@@ -509,6 +501,3 @@ class Button(Printable):
     def press(self):
         self.callback()
         self.pressed = not self.pressed
-
-    def relax(self):
-        self.pressed = False
